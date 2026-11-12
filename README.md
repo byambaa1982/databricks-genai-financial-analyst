@@ -68,7 +68,7 @@ workspace.fin_analyst
 |---|---|
 | `data/companyfacts/<TICKER>.json` | Every number the company has reported, from the SEC XBRL "company facts" API |
 | `data/filings/manifest.csv` | One row per annual report: ticker, fiscal year end, filing date, SEC link |
-| `data/filings/<TICKER>_10-K_<date>.pdf` | The annual report itself |
+| `data/filings/<TICKER>_10-K_<date>.pdf` | The annual report itself (added with chapter 4) |
 | `data/download_sec_data.py` | The script that fetched all of the above. Run it on your own computer to refresh the data or add a company |
 
 ## Repo layout
