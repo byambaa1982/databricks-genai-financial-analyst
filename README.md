@@ -23,9 +23,9 @@ Work in progress. Chapters are added in order.
 
 | # | Chapter | Notebook | Status |
 |---|---|---|---|
-| 1 | Set up the project in Unity Catalog: schema and two volumes | `notebooks/01_setup.py` | Written |
-| 2 | Load the raw data: files into volumes, numbers into a raw table | `notebooks/02_load_raw_data.py` | Written |
-| 3 | Clean the numbers into one row per company and year | `notebooks/03_clean_financials.py` | Written |
+| 1 | Set up the project in Unity Catalog: schema and two volumes | `notebooks/01_setup.py` | Runs on Databricks |
+| 2 | Load the raw data: files into volumes, numbers into a raw table | `notebooks/02_load_raw_data.py` | Runs on Databricks |
+| 3 | Clean the numbers into one row per company and year | `notebooks/03_clean_financials.py` | Runs on Databricks |
 | 4 | Turn the PDFs into text | | Planned |
 | 5 | Chunk the filings | | Planned |
 | 6 | Build a Vector Search index | | Planned |
@@ -35,8 +35,8 @@ Work in progress. Chapters are added in order.
 | 10 | Evaluate the answers | | Planned |
 | 11 | Permissions and lineage | | Planned |
 
-Chapters 1 to 3 have been run end to end on local Spark with Delta. Their run on a Databricks
-workspace is still to be recorded here.
+Chapters 1 to 3 have been run end to end on a serverless Databricks workspace (2026-11-12):
+34,657 raw facts, 359 clean facts, 27 company-years in `financials_annual`.
 
 ## Run it
 
@@ -68,7 +68,7 @@ workspace.fin_analyst
 |---|---|
 | `data/companyfacts/<TICKER>.json` | Every number the company has reported, from the SEC XBRL "company facts" API |
 | `data/filings/manifest.csv` | One row per annual report: ticker, fiscal year end, filing date, SEC link |
-| `data/filings/<TICKER>_10-K_<date>.pdf` | The annual report itself (added with chapter 4) |
+| `data/filings/<TICKER>_10-K_<date>.pdf` | The annual report itself, printed to PDF from the SEC filing |
 | `data/download_sec_data.py` | The script that fetched all of the above. Run it on your own computer to refresh the data or add a company |
 
 ## Repo layout
