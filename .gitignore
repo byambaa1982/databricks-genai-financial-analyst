@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+# raw HTML filings are an intermediate step of data/download_sec_data.py --pdf
+data/_html/
