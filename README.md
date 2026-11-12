@@ -26,7 +26,7 @@ Work in progress. Chapters are added in order.
 | 1 | Set up the project in Unity Catalog: schema and two volumes | `notebooks/01_setup.py` | Runs on Databricks |
 | 2 | Load the raw data: files into volumes, numbers into a raw table | `notebooks/02_load_raw_data.py` | Runs on Databricks |
 | 3 | Clean the numbers into one row per company and year | `notebooks/03_clean_financials.py` | Runs on Databricks |
-| 4 | Turn the PDFs into text | | Planned |
+| 4 | Turn the PDFs into text, labelled by 10-K Item, section and page | `notebooks/04_parse_filings.py` | Runs on Databricks |
 | 5 | Chunk the filings | | Planned |
 | 6 | Build a Vector Search index | | Planned |
 | 7 | A retrieval chain over the filings | | Planned |
@@ -35,19 +35,20 @@ Work in progress. Chapters are added in order.
 | 10 | Evaluate the answers | | Planned |
 | 11 | Permissions and lineage | | Planned |
 
-Chapters 1 to 3 have been run end to end on a serverless Databricks workspace (2026-11-12):
-34,657 raw facts, 359 clean facts, 27 company-years in `financials_annual`.
+Chapters 1 to 4 have been run end to end on a serverless Databricks workspace (2026-11-12):
+34,657 raw facts, 27 company-years in `financials_annual`, and 526 pages of filings parsed into
+about 1,250 labelled rows in `filing_text`.
 
 ## Run it
 
 1. In Databricks, go to **Workspace > Create > Git folder** and paste this repo's URL.
-2. Open `notebooks/01_setup` and run it, then `02_load_raw_data`, then `03_clean_financials`.
+2. Open `notebooks/01_setup` and run it, then each chapter in order.
 
 The notebooks use the catalog `workspace` (the default on Databricks Free Edition) and create a
 schema called `fin_analyst`. To use another catalog, change the `catalog` widget at the top of
 any notebook.
 
-After chapter 3 you have:
+After chapter 4 you have:
 
 ```
 workspace.fin_analyst
@@ -57,7 +58,10 @@ workspace.fin_analyst
 ├── filings              table    one row per annual report
 ├── metric_map           table    accounting tag -> business name
 ├── financial_facts      table    one value per company, metric and year
-└── financials_annual    table    one row per company and year
+├── financials_annual    table    one row per company and year
+├── filings_parsed_raw   table    ai_parse_document output, one row per PDF
+├── filing_elements      table    every parsed element with its Item and section
+└── filing_text          table    paragraphs, tables and footnotes, ready to chunk
 ```
 
 ## The data
