@@ -29,6 +29,9 @@ VS_ENDPOINT = "fin_analyst_search"                          # Free Edition allow
 VS_INDEX = f"{CATALOG}.{SCHEMA}.filing_chunks_index"
 EMBEDDING_MODEL = "databricks-gte-large-en"
 
+# The model that reads and answers (chapter 7 onwards).
+LLM_MODEL = "databricks-meta-llama-3-3-70b-instruct"
+
 print(f"Project schema: {CATALOG}.{SCHEMA}")
 print(f"Numbers volume: {FACTS_VOLUME}")
 print(f"Filings volume: {FILINGS_VOLUME}")

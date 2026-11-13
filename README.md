@@ -29,13 +29,13 @@ Work in progress. Chapters are added in order.
 | 4 | Turn the PDFs into text, labelled by 10-K Item, section and page | `notebooks/04_parse_filings.py` | Runs on Databricks |
 | 5 | Chunk the filings: about 1,600 chunks with id, Item, section and page | `notebooks/05_chunk_filings.py` | Runs on Databricks |
 | 6 | Build a Vector Search index and search the filings by meaning | `notebooks/06_vector_search_index.py` | Runs on Databricks |
-| 7 | A retrieval chain over the filings | | Planned |
+| 7 | A retrieval chain: answers from the filings with chunk ids as sources | `notebooks/07_rag_chain.py` | Runs on Databricks |
 | 8 | Unity Catalog functions as tools on the numbers | | Planned |
 | 9 | The agent that uses both tools and cites them | | Planned |
 | 10 | Evaluate the answers | | Planned |
 | 11 | Permissions and lineage | | Planned |
 
-Chapters 1 to 6 have been run end to end on a serverless Databricks workspace (2026-11-12):
+Chapters 1 to 7 have been run end to end on a serverless Databricks workspace (2026-11-12):
 34,657 raw facts, 27 company-years in `financials_annual`, and 526 pages of filings parsed into
 about 1,250 labelled rows in `filing_text`.
 
