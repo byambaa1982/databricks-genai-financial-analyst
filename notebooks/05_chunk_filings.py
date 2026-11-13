@@ -70,6 +70,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 CHUNK_SIZE = 1200
 CHUNK_OVERLAP = 150
+MIN_CHUNK_CHARS = 80   # shorter than this is a stray line such as "None." and is left out in step 3
 
 
 def clean(text):
@@ -133,7 +134,12 @@ for size, overlap in [(400, 50), (1200, 150), (4000, 500)]:
 # MAGIC - **`chunk_text`** starts with one line saying where the chunk is from. A chunk that only says "revenue
 # MAGIC   increased 29%" does not say whose revenue. The first line fixes that, for the search and for the model.
 # MAGIC
-# MAGIC Change Data Feed is switched on so the index in chapter 6 can follow changes to this table.
+# MAGIC Very short chunks are dropped. A chunk that only says "None." has nothing to tell, but with its source
+# MAGIC line on top it still looks like a match for any question about that company.
+# MAGIC
+# MAGIC The table is updated with `MERGE`, not overwritten, and Change Data Feed is switched on. The index in
+# MAGIC chapter 6 follows that feed, so when this notebook runs again only the chunks that really changed are
+# MAGIC embedded again.
 
 # COMMAND ----------
 
@@ -144,8 +150,9 @@ for ticker, company, fiscal_year, file_name, item, item_name, section, page, con
     counter[file_name] = counter.get(file_name, 0) + 1
     chunk_id = f"{ticker}-{fiscal_year}-{counter[file_name]:04d}"
     where = f"{company} annual report (10-K), fiscal year {fiscal_year}. {item}{' ' + item_name if item_name else ''} > {section}"
-    records.append((chunk_id, ticker, company, fiscal_year, file_name, item, item_name, section, page,
-                    content, f"{where}\n\n{content}"))
+    if len(content) >= MIN_CHUNK_CHARS:
+        records.append((chunk_id, ticker, company, fiscal_year, file_name, item, item_name, section, page,
+                        content, f"{where}\n\n{content}"))
 
 schema = StructType([
     StructField("chunk_id", StringType(), False), StructField("ticker", StringType()), StructField("company", StringType()),
@@ -155,15 +162,26 @@ schema = StructType([
 ])
 
 (spark.createDataFrame(records, schema)
-    .write.mode("overwrite").option("overwriteSchema", "true").saveAsTable("filing_chunks"))
+    .createOrReplaceTempView("new_chunks"))
 
-print(f"{len(records):,} chunks written to filing_chunks")
+# First run: create the empty table. Later runs: it is already there.
+spark.sql("CREATE TABLE IF NOT EXISTS filing_chunks AS SELECT * FROM new_chunks LIMIT 0")
+spark.sql("ALTER TABLE filing_chunks SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
+
+changes = spark.sql("""
+  MERGE INTO filing_chunks AS t
+  USING new_chunks AS s ON t.chunk_id = s.chunk_id
+  WHEN MATCHED AND t.chunk_text <> s.chunk_text THEN UPDATE SET *
+  WHEN NOT MATCHED THEN INSERT *
+  WHEN NOT MATCHED BY SOURCE THEN DELETE
+""").first()
+
+print(f"{len(records):,} chunks kept of {len(chunks):,}")
+print(f"filing_chunks: {changes['num_inserted_rows']:,} inserted, {changes['num_updated_rows']:,} updated, {changes['num_deleted_rows']:,} deleted")
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC ALTER TABLE filing_chunks SET TBLPROPERTIES (delta.enableChangeDataFeed = true);
-# MAGIC
 # MAGIC COMMENT ON TABLE filing_chunks IS
 # MAGIC   'Annual report (10-K) text cut into chunks of about 1,200 characters for search. One row per chunk. chunk_text is what gets embedded: a first line naming the company, fiscal year, Item and section, then the text. Tables are not included.';
 # MAGIC
@@ -185,8 +203,8 @@ checks = {
     "three companies": spark.sql("SELECT count(DISTINCT ticker) FROM filing_chunks").first()[0] == 3,
     "no chunk longer than the limit": spark.sql(
         f"SELECT count(*) FROM filing_chunks WHERE length(content) > {CHUNK_SIZE}").first()[0] == 0,
-    "no empty chunk, every chunk has a page": spark.sql(
-        "SELECT count(*) FROM filing_chunks WHERE length(trim(content)) = 0 OR page IS NULL").first()[0] == 0,
+    "no stray short chunk, every chunk has a page": spark.sql(
+        f"SELECT count(*) FROM filing_chunks WHERE length(content) < {MIN_CHUNK_CHARS} OR page IS NULL").first()[0] == 0,
     "every chunk_text starts with its source line": spark.sql(
         "SELECT count(*) FROM filing_chunks WHERE chunk_text NOT LIKE concat(company, ' annual report (10-K)%')").first()[0] == 0,
 }

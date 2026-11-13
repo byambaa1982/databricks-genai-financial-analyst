@@ -24,6 +24,11 @@ spark.sql(f"USE SCHEMA {SCHEMA}")
 FACTS_VOLUME = f"/Volumes/{CATALOG}/{SCHEMA}/raw_facts"      # the numbers, as JSON from SEC
 FILINGS_VOLUME = f"/Volumes/{CATALOG}/{SCHEMA}/raw_filings"  # the words, as annual report PDFs
 
+# Search by meaning (chapter 6 onwards).
+VS_ENDPOINT = "fin_analyst_search"                          # Free Edition allows one Vector Search endpoint
+VS_INDEX = f"{CATALOG}.{SCHEMA}.filing_chunks_index"
+EMBEDDING_MODEL = "databricks-gte-large-en"
+
 print(f"Project schema: {CATALOG}.{SCHEMA}")
 print(f"Numbers volume: {FACTS_VOLUME}")
 print(f"Filings volume: {FILINGS_VOLUME}")
