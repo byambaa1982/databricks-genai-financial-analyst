@@ -32,6 +32,15 @@ EMBEDDING_MODEL = "databricks-gte-large-en"
 # The model that reads and answers (chapter 7 onwards).
 LLM_MODEL = "databricks-meta-llama-3-3-70b-instruct"
 
+# The model that marks the answers (chapter 10). Free Edition has no built-in judge, so we name one.
+JUDGE_MODEL = LLM_MODEL
+
+# The functions the model can call as tools (chapter 8 onwards).
+TOOL_FUNCTIONS = [f"{CATALOG}.{SCHEMA}.company_financials", f"{CATALOG}.{SCHEMA}.search_filings"]
+
+# The group allowed to use the analyst (chapter 11). On Free Edition "account users" is only you.
+ANALYST_USERS = "account users"
+
 print(f"Project schema: {CATALOG}.{SCHEMA}")
 print(f"Numbers volume: {FACTS_VOLUME}")
 print(f"Filings volume: {FILINGS_VOLUME}")

@@ -19,7 +19,7 @@ Companies: Snowflake (SNOW), Datadog (DDOG), MongoDB (MDB). All data is public, 
 
 ## Status
 
-Work in progress. Chapters are added in order.
+Complete: eleven chapters, each one a notebook that runs on its own after the ones before it.
 
 | # | Chapter | Notebook | Status |
 |---|---|---|---|
@@ -30,14 +30,31 @@ Work in progress. Chapters are added in order.
 | 5 | Chunk the filings: about 1,600 chunks with id, Item, section and page | `notebooks/05_chunk_filings.py` | Runs on Databricks |
 | 6 | Build a Vector Search index and search the filings by meaning | `notebooks/06_vector_search_index.py` | Runs on Databricks |
 | 7 | A retrieval chain: answers from the filings with chunk ids as sources | `notebooks/07_rag_chain.py` | Runs on Databricks |
-| 8 | Unity Catalog functions as tools on the numbers | | Planned |
-| 9 | The agent that uses both tools and cites them | | Planned |
-| 10 | Evaluate the answers | | Planned |
-| 11 | Permissions and lineage | | Planned |
+| 8 | Tools: two Unity Catalog functions the model can call, one for the numbers and one for the words | `notebooks/08_tools.py` | Runs on Databricks |
+| 9 | The agent: both tools in a loop, answers that cite the table row and the page | `notebooks/09_agent.py` | Runs on Databricks |
+| 10 | Evaluate the answers: 14 questions, five scorers, two versions compared in MLflow | `notebooks/10_evaluate.py` | Runs on Databricks |
+| 11 | Permissions and lineage: who may use the analyst, and where an answer came from | `notebooks/11_permissions_and_lineage.py` | Runs on Databricks |
 
-Chapters 1 to 7 have been run end to end on a serverless Databricks workspace (2026-11-12):
-34,657 raw facts, 27 company-years in `financials_annual`, and 526 pages of filings parsed into
-about 1,250 labelled rows in `filing_text`.
+All eleven chapters have been run end to end on a serverless Databricks workspace (chapters 8 to 11
+on 2026-11-14): 34,657 raw facts, 27 company-years in `financials_annual`, and 526 pages of filings
+parsed into about 1,250 labelled rows in `filing_text`.
+
+What the finished analyst does with the project's question:
+
+```
+Q: How much did Snowflake's revenue grow in fiscal 2026, and was it higher prices or more usage?
+
+   step 1: company_financials({"company_ticker": "SNOW"})
+   step 2: search_filings({"question": "What drove revenue growth in fiscal 2026", "company_ticker": "SNOW"})
+
+A: Snowflake's revenue grew 29.2% in fiscal 2026 [financials_annual: SNOW FY2026]. The growth was
+   primarily due to increased consumption of the platform by existing customers, as evidenced by the
+   net revenue retention rate of 125% as of January 31, 2026 [SNOW-2026-0353]. ...
+```
+
+In chapter 10 the first version of the analyst passes 12 of 14 evaluation questions. One failure is the
+judge being wrong and one is the analyst being wrong. After one fix to each, the second version
+passes all 14.
 
 ## Run it
 
@@ -48,7 +65,7 @@ The notebooks use the catalog `workspace` (the default on Databricks Free Editio
 schema called `fin_analyst`. To use another catalog, change the `catalog` widget at the top of
 any notebook.
 
-After chapter 6 you have:
+After chapter 11 you have:
 
 ```
 workspace.fin_analyst
@@ -63,10 +80,25 @@ workspace.fin_analyst
 ├── filing_elements      table    every parsed element with its Item and section
 ├── filing_text          table    paragraphs, tables and footnotes
 ├── filing_chunks        table    search-sized chunks
-└── filing_chunks_index  index    the chunks, searchable by meaning
+├── filing_chunks_index  index    the chunks, searchable by meaning
+├── company_financials   function tool: one company's numbers, last five fiscal years
+├── search_filings       function tool: the 8 most relevant excerpts for a question
+└── eval_questions       table    14 questions with the facts a correct answer must contain
 
 fin_analyst_search       Vector Search endpoint serving the index
+fin_analyst_evaluation   MLflow experiment: one run per version of the analyst, one trace per question
 ```
+
+The two functions are the only things the model can call. It picks one from their `COMMENT` text:
+`company_financials` for a number, `search_filings` for what management wrote.
+
+Chapter 11 grants `USE SCHEMA` and `EXECUTE` on the two functions to the group named in
+`ANALYST_USERS` (`00_config`, default `account users`). Change it there before running if that
+group is wider than you want.
+
+Chapters 9 to 11 call the model many times. On Free Edition the endpoint limits requests per minute,
+so the agent waits and retries, and chapter 10 asks one question at a time and takes about six
+minutes.
 
 The first build of the index embeds every chunk and can take 30 to 45 minutes on a small workspace.
 Later runs only embed chunks that changed.
@@ -87,4 +119,5 @@ Later runs only embed chunks that changed.
 ```
 data/         source files and the download script
 notebooks/    one Databricks notebook per chapter, plus 00_config (shared settings)
+              and analyst.py (the agent, written by chapter 9 and imported by chapters 10 and 11)
 ```
