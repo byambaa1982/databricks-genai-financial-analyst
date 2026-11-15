@@ -16,7 +16,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install --quiet databricks-langchain
+# MAGIC %pip install --quiet databricks-langchain==0.22.0
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -52,15 +52,25 @@ display(spark.sql(f"""
 # MAGIC
 # MAGIC ## 2. Grant the least that works
 # MAGIC
-# MAGIC To use the analyst, a person needs three things: to enter the schema, and to run each function.
+# MAGIC To use the analyst, a person needs four things, from the outside in:
+# MAGIC
+# MAGIC | Privilege | On | Why |
+# MAGIC |---|---|---|
+# MAGIC | `USE CATALOG` | the catalog | to get in at all. Without it nothing below counts |
+# MAGIC | `USE SCHEMA` | the schema | to see what is in it |
+# MAGIC | `EXECUTE` | `company_financials` | to run the tool on the numbers |
+# MAGIC | `EXECUTE` | `search_filings` | to run the tool on the words |
+# MAGIC
 # MAGIC Nothing on the tables, the volumes or the index.
 # MAGIC
 # MAGIC The grants go to a **group**, never to a person. `ANALYST_USERS` is set in `00_config`. Here it is
-# MAGIC `account users`, which on Free Edition is only you. In a company it would be a group such as `analysts`.
+# MAGIC `account users`, which is everyone in the Databricks account. In a workspace of one that is only you.
+# MAGIC In a company, put a narrower group there, such as `analysts`, before running the next cell.
 
 # COMMAND ----------
 
 for statement in (
+    f"GRANT USE CATALOG ON CATALOG {CATALOG} TO `{ANALYST_USERS}`",
     f"GRANT USE SCHEMA ON SCHEMA {CATALOG}.{SCHEMA} TO `{ANALYST_USERS}`",
     f"GRANT EXECUTE ON FUNCTION {CATALOG}.{SCHEMA}.company_financials TO `{ANALYST_USERS}`",
     f"GRANT EXECUTE ON FUNCTION {CATALOG}.{SCHEMA}.search_filings TO `{ANALYST_USERS}`",
@@ -76,15 +86,23 @@ for statement in (
 # COMMAND ----------
 
 grants = spark.sql(f"""
-  SELECT 'function' AS object_type, routine_name AS object, privilege_type
+  SELECT 'catalog' AS object_type, catalog_name AS object, replace(privilege_type, '_', ' ') AS privilege_type
+  FROM {CATALOG}.information_schema.catalog_privileges
+  WHERE catalog_name = '{CATALOG}' AND grantee = '{ANALYST_USERS}'
+  UNION ALL
+  SELECT 'schema', schema_name, replace(privilege_type, '_', ' ') AS privilege_type
+  FROM {CATALOG}.information_schema.schema_privileges
+  WHERE schema_name = '{SCHEMA}' AND grantee = '{ANALYST_USERS}'
+  UNION ALL
+  SELECT 'function', routine_name, replace(privilege_type, '_', ' ') AS privilege_type
   FROM {CATALOG}.information_schema.routine_privileges
   WHERE routine_schema = '{SCHEMA}' AND grantee = '{ANALYST_USERS}'
   UNION ALL
-  SELECT 'table', table_name, privilege_type
+  SELECT 'table', table_name, replace(privilege_type, '_', ' ') AS privilege_type
   FROM {CATALOG}.information_schema.table_privileges
   WHERE table_schema = '{SCHEMA}' AND grantee = '{ANALYST_USERS}'
   UNION ALL
-  SELECT 'volume', volume_name, privilege_type
+  SELECT 'volume', volume_name, replace(privilege_type, '_', ' ') AS privilege_type
   FROM {CATALOG}.information_schema.volume_privileges
   WHERE volume_schema = '{SCHEMA}' AND grantee = '{ANALYST_USERS}'
   ORDER BY object_type, object
@@ -94,11 +112,14 @@ display(grants)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Two rows, both `EXECUTE`. No table and no volume appears, so a member of the group who types
-# MAGIC `SELECT * FROM sec_facts_raw` is refused, while `SELECT * FROM company_financials('MDB')` works.
+# MAGIC `USE CATALOG`, `USE SCHEMA` and two `EXECUTE`. No table and no volume appears. With these grants alone,
+# MAGIC a member of the group who types `SELECT * FROM sec_facts_raw` is refused, while
+# MAGIC `SELECT * FROM company_financials('MDB')` works.
 # MAGIC
-# MAGIC This notebook cannot show the refusal, because you own everything in the schema and an owner is never
-# MAGIC refused. To see it, sign in as a second user who is in the group.
+# MAGIC Two limits on what this cell proves. It lists the grants made to this one group: a person who is also
+# MAGIC in another group, or who was given more on the catalog, keeps those rights. And this notebook cannot
+# MAGIC show the refusal, because you own everything in the schema and an owner is never refused. To see it,
+# MAGIC sign in as a second user who is in the group and nothing else.
 # MAGIC
 # MAGIC ## 3. Lineage: what the tools are built from
 # MAGIC
@@ -114,12 +135,18 @@ display(grants)
 import re
 
 prefix = f"{CATALOG}.{SCHEMA}."
-edges = spark.sql(f"""
-  SELECT DISTINCT coalesce(source_table_full_name, source_path) AS source, target_table_full_name AS target
-  FROM system.access.table_lineage
-  WHERE target_table_catalog = '{CATALOG}' AND target_table_schema = '{SCHEMA}'
-    AND coalesce(source_table_full_name, source_path) IS NOT NULL
-""").collect()
+try:
+    edges = spark.sql(f"""
+      SELECT DISTINCT coalesce(source_table_full_name, source_path) AS source, target_table_full_name AS target
+      FROM system.access.table_lineage
+      WHERE target_table_catalog = '{CATALOG}' AND target_table_schema = '{SCHEMA}'
+        AND coalesce(source_table_full_name, source_path) IS NOT NULL
+    """).collect()
+except Exception as error:   # the lineage system table has to be enabled and readable by you
+    edges = []
+    print("Could not read system.access.table_lineage:", str(error)[:200])
+    print("Ask an account admin for access to the system.access schema. The Lineage tab in Catalog shows the same thing.")
+    print()
 
 
 def short_name(name):
@@ -173,9 +200,9 @@ for tool, reads in (("company_financials", "financials_annual"), ("search_filing
 
 # COMMAND ----------
 
-from analyst import build_analyst, chunks_cited, rows_cited, show
+from analyst import SYSTEM_V2, build_analyst, chunks_cited, rows_cited, show
 
-ask = build_analyst(TOOL_FUNCTIONS, LLM_MODEL)
+ask = build_analyst(TOOL_FUNCTIONS, LLM_MODEL, system=SYSTEM_V2)   # the prompt that passed chapter 10
 answer = ask("How much did Snowflake's revenue grow in fiscal 2026, and was it higher prices or more usage?")
 show(answer)
 
@@ -236,26 +263,30 @@ definer = spark.sql(f"""
 """).first()[0]
 numbers, words = number_trace.collect(), words_trace.collect()
 
+# The grants: the same on every run.
 checks = {
+    "the group may enter the catalog and the schema": {("catalog", CATALOG, "USE CATALOG"), ("schema", SCHEMA, "USE SCHEMA")} <= held,
     "the group may run both functions": {("function", "company_financials", "EXECUTE"), ("function", "search_filings", "EXECUTE")} <= held,
-    "the group holds nothing on any table or volume in the schema": all(kind == "function" for kind, _, _ in held),
+    "the group holds nothing on any table or volume in the schema": not any(kind in ("table", "volume") for kind, _, _ in held),
     "both functions run with their owner's rights": definer == 2,
-    "the cited number traces to a filing on sec.gov": len(numbers) >= 1 and all((r["sec_url"] or "").startswith("https://www.sec.gov/") for r in numbers),
-    "the cited excerpt traces to a PDF that is in the volume": len(words) >= 1 and all(os.path.exists(r["pdf_in_volume"]) for r in words),
+    "every number row that was traced leads to a filing on sec.gov": all((r["sec_url"] or "").startswith("https://www.sec.gov/") for r in numbers),
+    "every excerpt that was traced leads to a PDF that is in the volume": all(os.path.exists(r["pdf_in_volume"]) for r in words),
+}
+# These depend on what the model cited this time, and on lineage that is collected in the background.
+model_checks = {
+    "the answer cited a table row and an excerpt to trace": len(numbers) >= 1 and len(words) >= 1,
 }
 if parents:
-    checks["lineage links financials_annual back to the raw facts"] = "financial_facts" in parents.get("financials_annual", ()) \
+    model_checks["lineage links financials_annual back to the raw facts"] = "financial_facts" in parents.get("financials_annual", ()) \
         and "sec_facts_raw" in parents.get("financial_facts", ())
 else:
-    print("NOTE - lineage has not been collected yet. Run this cell again later.")
-for name, passed in checks.items():
-    print("PASS" if passed else "FAIL", "-", name)
-assert all(checks.values()), "permissions or lineage failed a check"
+    print("NOTE - no lineage to show yet. It is collected in the background: run this cell again later.")
+report_checks(checks, model_checks, "permissions or lineage")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## The finished project
+# MAGIC ## What we have now
 # MAGIC
 # MAGIC ```
 # MAGIC SEC EDGAR
@@ -264,18 +295,11 @@ assert all(checks.values()), "permissions or lineage failed a check"
 # MAGIC   └── annual reports (PDF) ─► raw_filings ─► filing_text ─► filing_chunks ─► filing_chunks_index ─► search_filings ─┘
 # MAGIC ```
 # MAGIC
-# MAGIC | Chapters | What they built |
-# MAGIC |---|---|
-# MAGIC | 1 to 3 | The numbers: from raw facts to one clean row per company and year |
-# MAGIC | 4 to 6 | The words: PDFs parsed, chunked and made searchable by meaning |
-# MAGIC | 7 | A chain that answers from the filings, with sources |
-# MAGIC | 8 to 9 | Two tools and a loop: an agent that uses the numbers and the words together |
-# MAGIC | 10 | An evaluation set and scorers, so a change can be measured |
-# MAGIC | 11 | Who may use it, and where every answer came from |
-# MAGIC
 # MAGIC The question from chapter 1 was *"Revenue grew. Was it price or volume?"* The analyst now answers it
 # MAGIC with a growth rate from a governed table, a reason from page 72 of the annual report, and a citation
 # MAGIC for each.
 # MAGIC
-# MAGIC To add a company, add its ticker to `data/download_sec_data.py`, run the script, and run the chapters
-# MAGIC again in order. Then add questions about it to `eval_questions` before trusting the answers.
+# MAGIC It still lives in a notebook, and only someone who opens the notebook can ask it anything.
+# MAGIC
+# MAGIC Next: `12_deploy_and_monitor` packages the analyst as a model, registers it in Unity Catalog and puts
+# MAGIC it behind an endpoint.

@@ -19,7 +19,7 @@ Companies: Snowflake (SNOW), Datadog (DDOG), MongoDB (MDB). All data is public, 
 
 ## Status
 
-Complete: eleven chapters, each one a notebook that runs on its own after the ones before it.
+Complete: twelve chapters, each one a notebook that runs on its own after the ones before it.
 
 | # | Chapter | Notebook | Status |
 |---|---|---|---|
@@ -34,10 +34,13 @@ Complete: eleven chapters, each one a notebook that runs on its own after the on
 | 9 | The agent: both tools in a loop, answers that cite the table row and the page | `notebooks/09_agent.py` | Runs on Databricks |
 | 10 | Evaluate the answers: 14 questions, five scorers, two versions compared in MLflow | `notebooks/10_evaluate.py` | Runs on Databricks |
 | 11 | Permissions and lineage: who may use the analyst, and where an answer came from | `notebooks/11_permissions_and_lineage.py` | Runs on Databricks |
+| 12 | Deploy and monitor: the analyst as a model in Unity Catalog, an endpoint, and what to watch | `notebooks/12_deploy_and_monitor.py` | Runs on Databricks, except the endpoint step (see below) |
 
-All eleven chapters have been run end to end on a serverless Databricks workspace (chapters 8 to 11
-on 2026-11-14): 34,657 raw facts, 27 company-years in `financials_annual`, and 526 pages of filings
-parsed into about 1,250 labelled rows in `filing_text`.
+All twelve chapters have been run on a paid, serverless Databricks workspace (chapters 3 and 5 to 12
+again on 2026-11-15): 34,657 raw facts, 27 company-years in `financials_annual`, and 526 pages of filings
+parsed into about 1,250 labelled rows in `filing_text`. One step has not been run: creating the serving
+endpoint in chapter 12. It is billed while it exists, so it only runs when you set that notebook's
+`deploy` widget to `yes`.
 
 What the finished analyst does with the project's question:
 
@@ -52,20 +55,33 @@ A: Snowflake's revenue grew 29.2% in fiscal 2026 [financials_annual: SNOW FY2026
    net revenue retention rate of 125% as of January 31, 2026 [SNOW-2026-0353]. ...
 ```
 
-In chapter 10 the first version of the analyst passes 12 of 14 evaluation questions. One failure is the
-judge being wrong and one is the analyst being wrong. After one fix to each, the second version
-passes all 14.
+In chapter 10, in the runs recorded here, the first version of the analyst passes 12 of 14 evaluation
+questions. One failure is the judge being wrong and one is the analyst being wrong. After one fix to
+each, the second version passes all 14. A model does not answer the same way every time, so your
+counts can differ.
+
+## Reading the checks
+
+Every chapter ends with a list of checks.
+
+- **FAIL** means the code or the data is wrong. It stops the notebook.
+- **WARN** (from chapter 7 on) means the model answered differently from the run the chapter was written
+  from. It does not stop the notebook. Read the answer above it, then decide. Chapter 10 turns that
+  reading into a measurement.
 
 ## Run it
 
 1. In Databricks, go to **Workspace > Create > Git folder** and paste this repo's URL.
 2. Open `notebooks/01_setup` and run it, then each chapter in order.
 
-The notebooks use the catalog `workspace` (the default on Databricks Free Edition) and create a
+You need a Databricks workspace with Unity Catalog, serverless compute, Vector Search and the
+Foundation Model endpoints (`databricks-meta-llama-3-3-70b-instruct`, `databricks-gte-large-en`).
+
+The notebooks use the catalog `workspace` (every new workspace has it) and create a
 schema called `fin_analyst`. To use another catalog, change the `catalog` widget at the top of
 any notebook.
 
-After chapter 11 you have:
+After chapter 12 you have:
 
 ```
 workspace.fin_analyst
@@ -83,7 +99,8 @@ workspace.fin_analyst
 ├── filing_chunks_index  index    the chunks, searchable by meaning
 ├── company_financials   function tool: one company's numbers, last five fiscal years
 ├── search_filings       function tool: the 8 most relevant excerpts for a question
-└── eval_questions       table    14 questions with the facts a correct answer must contain
+├── eval_questions       table    14 questions with the facts a correct answer must contain
+└── analyst              model    the analyst, one version per run of chapter 12
 
 fin_analyst_search       Vector Search endpoint serving the index
 fin_analyst_evaluation   MLflow experiment: one run per version of the analyst, one trace per question
@@ -92,16 +109,37 @@ fin_analyst_evaluation   MLflow experiment: one run per version of the analyst, 
 The two functions are the only things the model can call. It picks one from their `COMMENT` text:
 `company_financials` for a number, `search_filings` for what management wrote.
 
-Chapter 11 grants `USE SCHEMA` and `EXECUTE` on the two functions to the group named in
-`ANALYST_USERS` (`00_config`, default `account users`). Change it there before running if that
-group is wider than you want.
+Chapter 11 grants `USE CATALOG`, `USE SCHEMA` and `EXECUTE` on the two functions to the group named in
+`ANALYST_USERS` (`00_config`). The default is `account users`, which is everyone in your Databricks
+account. Change it there before running if that is wider than you want.
 
-Chapters 9 to 11 call the model many times. On Free Edition the endpoint limits requests per minute,
+Chapters 9 to 12 call the model many times. The pay-per-token endpoint limits requests per minute,
 so the agent waits and retries, and chapter 10 asks one question at a time and takes about six
 minutes.
 
 The first build of the index embeds every chunk and can take 30 to 45 minutes on a small workspace.
 Later runs only embed chunks that changed.
+
+### What it costs
+
+Two things are billed for as long as they exist, used or not: the Vector Search endpoint
+`fin_analyst_search` (chapter 6) and the serving endpoint (chapter 12, only if you switch it on).
+Delete both when you are done: **Compute > Vector Search** and **Serving**. Everything else is billed
+only while a notebook runs.
+
+### Versions
+
+The notebooks pin the packages they install to the versions they were run with
+(`databricks-langchain` 0.22.0, `databricks-vectorsearch` 0.82, `langchain-text-splitters` 1.1.3,
+`mlflow` 3.18.0, `databricks-agents` 1.13.0). Raise them together, then run chapter 10 to see whether
+anything changed.
+
+### One definition to know
+
+`free_cash_flow` in this project is operating cash flow minus purchases of property and equipment,
+the same for all three companies. It is not the free cash flow each company quotes in its own report,
+which can subtract more: Datadog also subtracts capitalized software, so its own margin for fiscal
+2025 is about 2.5 points below the 29.2% in `financials_annual`.
 
 ## The data
 
@@ -118,6 +156,9 @@ Later runs only embed chunks that changed.
 
 ```
 data/         source files and the download script
-notebooks/    one Databricks notebook per chapter, plus 00_config (shared settings)
-              and analyst.py (the agent, written by chapter 9 and imported by chapters 10 and 11)
+notebooks/    one Databricks notebook per chapter, plus 00_config (shared settings),
+              analyst.py (the agent, written by chapter 9 and imported by chapters 10 to 12)
+              and analyst_agent.py (the agent as an MLflow model, written by chapter 12)
+
+Code: MIT licence. Data in data/: public SEC filings.
 ```

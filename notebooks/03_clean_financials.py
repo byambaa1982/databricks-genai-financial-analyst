@@ -122,6 +122,12 @@
 # MAGIC
 # MAGIC One row per company and year. The ratios an analyst asks for are worked out once, here, so every
 # MAGIC answer later uses the same definition.
+# MAGIC
+# MAGIC One definition needs a warning. Free cash flow here is operating cash flow minus purchases of property
+# MAGIC and equipment, the same for all three companies. Each company also quotes its own free cash flow, and
+# MAGIC those definitions differ: Datadog, for example, also subtracts capitalized software, so the margin in
+# MAGIC its report is about 2.5 points lower than ours. The column comments in step 5 say so, because the
+# MAGIC agent will read both the table and the report.
 
 # COMMAND ----------
 
@@ -199,8 +205,8 @@ assert all(checks.values()), "financials_annual failed a check"
 # MAGIC ALTER TABLE financials_annual ALTER COLUMN revenue_growth_pct        COMMENT 'Revenue growth versus the prior fiscal year, percent.';
 # MAGIC ALTER TABLE financials_annual ALTER COLUMN gross_margin_pct          COMMENT 'Gross profit divided by revenue, percent.';
 # MAGIC ALTER TABLE financials_annual ALTER COLUMN operating_margin_pct      COMMENT 'Operating income (GAAP) divided by revenue, percent. Negative means an operating loss.';
-# MAGIC ALTER TABLE financials_annual ALTER COLUMN free_cash_flow            COMMENT 'Operating cash flow minus capital expenditure (purchases of property and equipment), USD.';
-# MAGIC ALTER TABLE financials_annual ALTER COLUMN free_cash_flow_margin_pct COMMENT 'Free cash flow divided by revenue, percent.';
+# MAGIC ALTER TABLE financials_annual ALTER COLUMN free_cash_flow            COMMENT 'Operating cash flow minus purchases of property and equipment, USD. One definition for all three companies. It is not the free cash flow a company quotes in its own report, which can subtract more (Datadog also subtracts capitalized software), so the figure in a filing can be lower.';
+# MAGIC ALTER TABLE financials_annual ALTER COLUMN free_cash_flow_margin_pct COMMENT 'Free cash flow as defined in this table, divided by revenue, percent. Can be higher than the margin the company quotes in its own report.';
 # MAGIC ALTER TABLE financials_annual ALTER COLUMN stock_comp                COMMENT 'Stock-based compensation expense for the fiscal year, USD.';
 # MAGIC ALTER TABLE financials_annual ALTER COLUMN stock_comp_pct_of_revenue COMMENT 'Stock-based compensation divided by revenue, percent.';
 # MAGIC ALTER TABLE financials_annual ALTER COLUMN cash                      COMMENT 'Cash and cash equivalents at fiscal year end, USD. Excludes investments.';

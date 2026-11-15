@@ -19,7 +19,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install --quiet langchain-text-splitters
+# MAGIC %pip install --quiet langchain-text-splitters==1.1.3
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -130,7 +130,9 @@ for size, overlap in [(400, 50), (1200, 150), (4000, 500)]:
 # MAGIC
 # MAGIC Two details matter for the next chapter:
 # MAGIC
-# MAGIC - **`chunk_id`** is a stable key, like `SNOW-2026-0412`. A search index needs one row = one id.
+# MAGIC - **`chunk_id`** is the key, like `SNOW-2026-0412`: ticker, fiscal year and the chunk's position in the
+# MAGIC   report. A search index needs one row = one id. The id stays the same from run to run as long as the
+# MAGIC   parsed text and the chunk settings do. Change the chunk size and every id is dealt out again.
 # MAGIC - **`chunk_text`** starts with one line saying where the chunk is from. A chunk that only says "revenue
 # MAGIC   increased 29%" does not say whose revenue. The first line fixes that, for the search and for the model.
 # MAGIC
@@ -185,7 +187,7 @@ print(f"filing_chunks: {changes['num_inserted_rows']:,} inserted, {changes['num_
 # MAGIC COMMENT ON TABLE filing_chunks IS
 # MAGIC   'Annual report (10-K) text cut into chunks of about 1,200 characters for search. One row per chunk. chunk_text is what gets embedded: a first line naming the company, fiscal year, Item and section, then the text. Tables are not included.';
 # MAGIC
-# MAGIC ALTER TABLE filing_chunks ALTER COLUMN chunk_id   COMMENT 'Stable key: ticker, fiscal year and position in the report, for example SNOW-2026-0412.';
+# MAGIC ALTER TABLE filing_chunks ALTER COLUMN chunk_id   COMMENT 'Key: ticker, fiscal year and position in the report, for example SNOW-2026-0412. Changes if the chunk settings change.';
 # MAGIC ALTER TABLE filing_chunks ALTER COLUMN page       COMMENT 'Page in the PDF where the chunk starts.';
 # MAGIC ALTER TABLE filing_chunks ALTER COLUMN content    COMMENT 'The chunk text alone.';
 # MAGIC ALTER TABLE filing_chunks ALTER COLUMN chunk_text COMMENT 'Source line plus the chunk text. This column is embedded and searched.';

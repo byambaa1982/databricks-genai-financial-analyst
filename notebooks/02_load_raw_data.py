@@ -2,7 +2,8 @@
 # MAGIC %md
 # MAGIC # Chapter 2: Load the raw data
 # MAGIC
-# MAGIC Free Edition cannot download from sec.gov, so the source files ship with this repo in `data/`.
+# MAGIC The source files ship with this repo in `data/`, so nothing is downloaded inside Databricks and the
+# MAGIC project also runs on a workspace with no internet access.
 # MAGIC This chapter:
 # MAGIC
 # MAGIC 1. copies them from the repo into the two volumes,

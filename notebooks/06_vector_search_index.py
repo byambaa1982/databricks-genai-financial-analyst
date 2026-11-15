@@ -16,7 +16,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install --quiet databricks-vectorsearch
+# MAGIC %pip install --quiet databricks-vectorsearch==0.82
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -29,7 +29,8 @@
 # MAGIC ## 1. The endpoint
 # MAGIC
 # MAGIC Created once. The first time takes several minutes; after that this cell finds it and moves on.
-# MAGIC Free Edition allows one Vector Search endpoint, and this project uses it.
+# MAGIC An endpoint is billed for as long as it exists, used or not. When you are done with the project,
+# MAGIC delete it under **Compute > Vector Search**.
 
 # COMMAND ----------
 
@@ -80,14 +81,19 @@ else:
     print(f"Index {VS_INDEX} created, first sync started")
 
 
-def wait_for_sync(index):
-    """Wait until the index is online and has nothing left to process."""
+def wait_for_sync(index, timeout_minutes=90):
+    """Wait until the index is online and has nothing left to process. Stop if the sync fails or takes too long."""
+    deadline = time.time() + timeout_minutes * 60
     time.sleep(30)  # give the sync a moment to register
-    while True:
+    while time.time() < deadline:
         status = index.describe()["status"]
-        if status.get("ready") and status.get("detailed_state", "").endswith("NO_PENDING_UPDATE"):
+        state = status.get("detailed_state", "")
+        if "FAILED" in state:
+            raise RuntimeError(f"The index sync failed ({state}): {status.get('message', '')}")
+        if status.get("ready") and state.endswith("NO_PENDING_UPDATE"):
             return status
         time.sleep(30)
+    raise TimeoutError(f"The index was not ready after {timeout_minutes} minutes. It keeps building: run this cell again.")
 
 
 status = wait_for_sync(index)
@@ -130,15 +136,16 @@ print(hits[0]["content"][:700])
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC The top results come from "Expanding Within our Existing Customer Base" and "Revenue", the parts of the
-# MAGIC report that discuss growth. Not every one states the reason, and one is a risk factor that talks about
-# MAGIC revenue without explaining this year's growth. Search finds candidates. Reading them and answering is
-# MAGIC the model's job, in chapter 7.
+# MAGIC When this was written, the top results came from "Expanding Within our Existing Customer Base" and
+# MAGIC "Revenue", the parts of the report that discuss growth. Not every one stated the reason, and one was a
+# MAGIC risk factor that talks about revenue without explaining this year's growth. Your order can differ a
+# MAGIC little: the search is approximate. Search finds candidates. Reading them and answering is the model's
+# MAGIC job, in chapter 7.
 # MAGIC
 # MAGIC ## 4. A tighter filter: search only where the answer can be
 # MAGIC
 # MAGIC "Why did revenue grow" is answered in Item 7, Management's Discussion. Adding the Item to the filter
-# MAGIC removes the risk factor and makes room for one more useful chunk.
+# MAGIC leaves out the risk factors and makes room for more chunks that can hold the answer.
 
 # COMMAND ----------
 

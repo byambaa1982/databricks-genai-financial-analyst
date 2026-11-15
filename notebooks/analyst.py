@@ -1,4 +1,6 @@
 """The AI financial analyst: two Unity Catalog functions in a loop. Written by notebooks/09_agent."""
+import csv
+import io
 import json
 import re
 import time
@@ -19,6 +21,12 @@ Rules:
 5. If asked whether to buy, sell or hold a stock, or for a price forecast, reply exactly: {NO_ADVICE}
 
 Answer in two to five sentences."""
+
+# The second version of the prompt. Chapter 10 measures SYSTEM, finds a question sent to the wrong tool,
+# and shows that this one extra rule fixes it. Chapters 11 and 12 use SYSTEM_V2.
+SYSTEM_V2 = SYSTEM + """
+
+The financials table holds only the metrics listed in the description of company_financials. Customer counts, ARR, retention rates and expansion rates are not in it: they are in the filings, so use search_filings for them."""
 
 CHUNK_ID = r"[A-Z]+-\d{4}-\d{4}"
 
@@ -71,6 +79,20 @@ def chunks_returned(result):
 
 def chunks_cited(result):
     return set(re.findall(rf"\[({CHUNK_ID})\]", result["answer"]))
+
+
+def rows_returned(result):
+    """(ticker, fiscal year) of every table row company_financials gave the model."""
+    found = set()
+    for s in result["steps"]:
+        if s["tool"] != "company_financials":
+            continue
+        try:                                              # a tool returns its rows as CSV inside JSON
+            table = json.loads(s["rows"])["value"]
+            found |= {(r["ticker"], int(r["fiscal_year"])) for r in csv.DictReader(io.StringIO(table))}
+        except (ValueError, KeyError, TypeError):         # an error message instead of rows: nothing was returned
+            pass
+    return found
 
 
 def rows_cited(result):

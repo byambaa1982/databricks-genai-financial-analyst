@@ -13,10 +13,13 @@
 # MAGIC | Evaluation set | Questions with the answer we expect, written down once | the `eval_questions` table |
 # MAGIC | Scorers | Functions that mark one answer pass or fail | four in code, one judged by a model |
 # MAGIC | A run | Every question asked, every answer scored, the results kept | an MLflow run with one trace per question |
+# MAGIC
+# MAGIC Until now a WARN at the end of a chapter meant "the model answered differently, go and read it". This
+# MAGIC chapter is where that reading becomes a number.
 
 # COMMAND ----------
 
-# MAGIC %pip install --quiet databricks-langchain
+# MAGIC %pip install --quiet databricks-langchain==0.22.0 mlflow==3.18.0
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -108,9 +111,10 @@ os.environ["MLFLOW_GENAI_EVAL_MAX_WORKERS"] = "1"   # one question at a time: a 
 import mlflow
 from mlflow.genai.scorers import Correctness, scorer
 
-from analyst import build_analyst, chunks_cited, chunks_returned, rows_cited, tools_used
+from analyst import build_analyst, chunks_cited, chunks_returned, rows_cited, rows_returned, tools_used
 
 warnings.filterwarnings("ignore")
+mlflow.langchain.autolog()   # every model call and tool call inside the loop becomes a step in the trace
 
 REFUSALS = (NOT_FOUND.rstrip("."), NO_ADVICE.rstrip("."))
 
@@ -121,15 +125,12 @@ def make_predict_fn(ask):
     @mlflow.trace(name="analyst")
     def predict_fn(question):
         result = ask(question)
-        rows_returned = sorted({f"{s['args'].get('company_ticker', '').upper()} FY{year}"
-                                for s in result["steps"] if s["tool"] == "company_financials"
-                                for year in re.findall(r",(\d{4}),\d{4}-\d{2}-\d{2},", s["rows"])})
         return {
             "answer": result["answer"],
             "tools_used": tools_used(result),
             "chunks_returned": sorted(chunks_returned(result)),
             "chunks_cited": sorted(chunks_cited(result)),
-            "rows_returned": rows_returned,
+            "rows_returned": sorted(f"{t} FY{y}" for t, y in rows_returned(result)),
             "rows_cited": sorted(f"{t} FY{y}" for t, y in rows_cited(result)),
         }
 
@@ -163,16 +164,17 @@ def refuses_when_it_should(outputs, expectations):
     return refused(outputs) == (expectations["kind"] == "refuse")
 
 
-# The judge. Free Edition has no built-in judge model, so we name one: the same endpoint the analyst uses.
+# The judge. We name the model, so every run is marked by the same one: here, the endpoint the analyst uses.
 correct = Correctness(model=f"databricks:/{JUDGE_MODEL}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC A note on the judge. Here the judge is the same model that wrote the answers, because it is the one
-# MAGIC every workspace has. That is acceptable for this task, comparing a short answer with a written fact,
-# MAGIC but a judge is a model and can be wrong. Section 4 reads its reasons instead of trusting the score.
-# MAGIC With a stronger model available, change `JUDGE_MODEL` in `00_config`.
+# MAGIC A note on the judge. Here the judge is the same model that wrote the answers, which keeps the project
+# MAGIC to one endpoint. That is acceptable for this task, comparing a short answer with a written fact, but a
+# MAGIC judge is a model and can be wrong. Section 4 reads its reasons instead of trusting the score. A
+# MAGIC different, stronger model makes a better judge: set `JUDGE_MODEL` in `00_config` to any chat endpoint
+# MAGIC in your workspace.
 # MAGIC
 # MAGIC ## 3. Run it
 # MAGIC
@@ -262,7 +264,11 @@ v1_failed = show_failures(v1)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Two questions failed, for two different reasons.
+# MAGIC What follows describes the run this chapter was written from. A model does not answer the same way
+# MAGIC every time, so your list above can be shorter, longer or different. Read it the same way: for each
+# MAGIC failure, decide whether the analyst or the measurement is at fault.
+# MAGIC
+# MAGIC In that run two questions failed, for two different reasons.
 # MAGIC
 # MAGIC **`n1`: the analyst is right and the judge is wrong.** The answer says $4683.9 million. The expected
 # MAGIC fact says "about $4,684 million". They are the same number, and the judge marked it wrong over the
@@ -282,8 +288,9 @@ v1_failed = show_failures(v1)
 # MAGIC %md
 # MAGIC ## 5. Fix one thing at a time
 # MAGIC
-# MAGIC **The evaluation set.** The expected fact for `n1` now states the number the way the table has it. The
-# MAGIC change is an `UPDATE`, so the table's history records what the expectation was for each run.
+# MAGIC **The evaluation set.** The expected fact for `n1` now states the number the way the table has it:
+# MAGIC $4,683.9 million, read from `financials_annual`, not copied from the analyst's answer. The change is
+# MAGIC an `UPDATE`, so the table's history records what the expectation was for each run.
 
 # COMMAND ----------
 
@@ -303,16 +310,17 @@ v1_failed = show_failures(v1)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC **The analyst.** One more rule in the prompt, telling the model where the business metrics live.
-# MAGIC `build_analyst` takes the prompt as an argument, so version 2 is the same code with a longer prompt.
+# MAGIC **The analyst.** One more rule in the prompt, telling the model where the business metrics live. It is
+# MAGIC the `SYSTEM_V2` that has been sitting in `analyst.py` since chapter 9. `build_analyst` takes the prompt
+# MAGIC as an argument, so version 2 is the same code with a longer prompt.
 
 # COMMAND ----------
 
-from analyst import SYSTEM
+from analyst import SYSTEM, SYSTEM_V2
 
-SYSTEM_V2 = SYSTEM + ("\n\nThe financials table holds only the metrics listed in the description of company_financials. "
-                      "Customer counts, ARR, retention rates and expansion rates are not in it: "
-                      "they are in the filings, so use search_filings for them.")
+print("The rule version 2 adds:")
+print(SYSTEM_V2[len(SYSTEM):].strip())
+print()
 
 v2 = evaluate("analyst v2", build_analyst(TOOL_FUNCTIONS, LLM_MODEL, system=SYSTEM_V2))
 
@@ -335,11 +343,11 @@ v2_failed = show_failures(v2)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Both failures are gone, and none of the other twelve questions got worse. That second half is why the
-# MAGIC whole set is run again and not only the question that failed: a new rule in a prompt can fix one answer
-# MAGIC and break another, and only the full run shows it.
+# MAGIC In the run this was written from, both failures were gone and none of the other twelve questions got
+# MAGIC worse. That second half is why the whole set is run again and not only the question that failed: a new
+# MAGIC rule in a prompt can fix one answer and break another, and only the full run shows it.
 # MAGIC
-# MAGIC 100% here means fourteen questions out of fourteen. It does not mean the analyst is always right. The
+# MAGIC 100% there meant fourteen questions out of fourteen. It does not mean the analyst is always right. The
 # MAGIC set is small and we wrote it. It grows the honest way: every wrong answer found in real use becomes a
 # MAGIC new row in `eval_questions`.
 
@@ -354,17 +362,21 @@ v2_failed = show_failures(v2)
 # COMMAND ----------
 
 m1, m2 = scores(v1), scores(v2)
+
+# The evaluation itself: the same on every run.
 checks = {
     "all 14 questions were asked and scored in both runs": len(v1.result_df) == 14 and len(v2.result_df) == 14,
+    "every scorer gave a score in both runs": all(n in m1 and n in m2 for n in SCORERS),
+}
+# The bars. A WARN here is the result of the evaluation, not a broken notebook: go back to section 4.
+model_checks = {
     "no answer cites a source the tools did not return": m2["citations_exist"] == 1.0,
     "every refusal is a question it should refuse, and the reverse": m2["refuses_when_it_should"] == 1.0,
     "the right tools were used on at least 90% of questions": m2["right_tools"] >= 0.9,
     "at least 90% of answers are correct according to the judge": m2["correctness"] >= 0.9,
     "version 2 is no worse than version 1 on any scorer": all(m2[n] >= m1[n] for n in SCORERS),
 }
-for name, ok in checks.items():
-    print("PASS" if ok else "FAIL", "-", name)
-assert all(checks.values()), "the analyst is below the bar"
+report_checks(checks, model_checks, "the evaluation")
 
 # COMMAND ----------
 
@@ -385,8 +397,9 @@ assert all(checks.values()), "the analyst is below the bar"
 # MAGIC Open **Experiments > fin_analyst_evaluation** in the workspace to see each trace: the question, every
 # MAGIC model call and tool call with its rows, the answer, and the five scores next to it.
 # MAGIC
-# MAGIC The new rule has earned its place. To keep it, move the sentence into `SYSTEM` in `09_agent`. It is left
-# MAGIC out there on purpose, so that this chapter has something to find.
+# MAGIC The new rule has earned its place. `analyst.py` keeps both prompts: `SYSTEM` is the first version, so
+# MAGIC this chapter has something to find, and `SYSTEM_V2` is the one that passed. The remaining chapters use
+# MAGIC `SYSTEM_V2`.
 # MAGIC
 # MAGIC The analyst now answers, cites and is measured. One question is left: who is allowed to use it, and
 # MAGIC what can it reach?

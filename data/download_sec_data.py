@@ -1,6 +1,6 @@
 """Download the project's source data from SEC EDGAR. Run this on your own computer, not in Databricks.
 
-Databricks Free Edition cannot reach sec.gov, so the data is fetched locally and the result is
+Many Databricks workspaces block outbound internet, so the data is fetched locally and the result is
 committed to this repo. You only need to run this script if you want fresher filings or other
 companies.
 

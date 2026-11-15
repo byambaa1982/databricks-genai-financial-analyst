@@ -23,7 +23,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install --quiet databricks-langchain
+# MAGIC %pip install --quiet databricks-langchain==0.22.0
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -44,6 +44,9 @@
 # MAGIC | the `for` loop in `ask` | Calls the model, runs the tools it asks for, hands back the rows, repeats |
 # MAGIC | `steps` | A record of every tool call and what it returned, so an answer can be checked afterwards |
 # MAGIC
+# MAGIC The file also holds a second prompt, `SYSTEM_V2`. This chapter does not use it. Chapter 10 measures
+# MAGIC the first prompt, finds its weak spot, and shows what the extra rule in `SYSTEM_V2` changes.
+# MAGIC
 # MAGIC Three details make the loop safe to leave running:
 # MAGIC
 # MAGIC - **a limit**, `max_steps`. A model that keeps asking for tools would otherwise run, and cost, forever,
@@ -55,6 +58,8 @@
 
 # MAGIC %%writefile analyst.py
 # MAGIC """The AI financial analyst: two Unity Catalog functions in a loop. Written by notebooks/09_agent."""
+# MAGIC import csv
+# MAGIC import io
 # MAGIC import json
 # MAGIC import re
 # MAGIC import time
@@ -75,6 +80,12 @@
 # MAGIC 5. If asked whether to buy, sell or hold a stock, or for a price forecast, reply exactly: {NO_ADVICE}
 # MAGIC
 # MAGIC Answer in two to five sentences."""
+# MAGIC
+# MAGIC # The second version of the prompt. Chapter 10 measures SYSTEM, finds a question sent to the wrong tool,
+# MAGIC # and shows that this one extra rule fixes it. Chapters 11 and 12 use SYSTEM_V2.
+# MAGIC SYSTEM_V2 = SYSTEM + """
+# MAGIC
+# MAGIC The financials table holds only the metrics listed in the description of company_financials. Customer counts, ARR, retention rates and expansion rates are not in it: they are in the filings, so use search_filings for them."""
 # MAGIC
 # MAGIC CHUNK_ID = r"[A-Z]+-\d{4}-\d{4}"
 # MAGIC
@@ -129,6 +140,20 @@
 # MAGIC     return set(re.findall(rf"\[({CHUNK_ID})\]", result["answer"]))
 # MAGIC
 # MAGIC
+# MAGIC def rows_returned(result):
+# MAGIC     """(ticker, fiscal year) of every table row company_financials gave the model."""
+# MAGIC     found = set()
+# MAGIC     for s in result["steps"]:
+# MAGIC         if s["tool"] != "company_financials":
+# MAGIC             continue
+# MAGIC         try:                                              # a tool returns its rows as CSV inside JSON
+# MAGIC             table = json.loads(s["rows"])["value"]
+# MAGIC             found |= {(r["ticker"], int(r["fiscal_year"])) for r in csv.DictReader(io.StringIO(table))}
+# MAGIC         except (ValueError, KeyError, TypeError):         # an error message instead of rows: nothing was returned
+# MAGIC             pass
+# MAGIC     return found
+# MAGIC
+# MAGIC
 # MAGIC def rows_cited(result):
 # MAGIC     """(ticker, fiscal year) of every table row the answer cites."""
 # MAGIC     return {(t, int(y)) for t, y in re.findall(r"\[financials_annual: ([A-Z]+) FY(\d{4})\]", result["answer"])}
@@ -144,7 +169,7 @@
 
 # COMMAND ----------
 
-from analyst import NO_ADVICE, NOT_FOUND, build_analyst, chunks_cited, chunks_returned, rows_cited, show, tools_used
+from analyst import NO_ADVICE, NOT_FOUND, build_analyst, chunks_cited, chunks_returned, rows_cited, rows_returned, show, tools_used
 
 ask = build_analyst(TOOL_FUNCTIONS, LLM_MODEL)
 
@@ -161,8 +186,8 @@ show(compare)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Two steps, one per company, then an answer. The loop did what our hand-written round trip could not:
-# MAGIC it gave the model a second turn.
+# MAGIC One lookup per company, then an answer. The loop did what our hand-written round trip could not:
+# MAGIC it let the model go on until it had both.
 # MAGIC
 # MAGIC Look at the citations. Each number points to a row, `[financials_annual: MDB FY2026]`, and the model
 # MAGIC compared fiscal 2026 for MongoDB with fiscal 2025 for Datadog. It took "latest year" from the rows, not
@@ -233,10 +258,10 @@ show(words)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Here the agent ran the same search twice, once per company, and kept the two sets of excerpts apart.
-# MAGIC Datadog states the split outright: about 75% of the increase from existing customers. MongoDB gives no
-# MAGIC such split, and the answer does not invent one. It reports what MongoDB does say, an expansion rate of
-# MAGIC about 121%.
+# MAGIC When this was written the agent ran the same search twice, once per company, and kept the two sets of
+# MAGIC excerpts apart. Datadog states the split outright: about 75% of the increase from existing customers.
+# MAGIC MongoDB gives no such split, and the answer did not invent one. It reported what MongoDB does say, an
+# MAGIC expansion rate of about 121%. Check your own answer against the steps printed above it.
 
 # COMMAND ----------
 
@@ -258,10 +283,10 @@ show(advice)
 # MAGIC %md
 # MAGIC Two different refusals:
 # MAGIC
-# MAGIC - **The share price.** The agent searched, read eight excerpts, found no price and said so. It looked
-# MAGIC   before refusing.
-# MAGIC - **Buy or sell.** No tool call at all. Rule 5 answers this one before any lookup, so it costs one model
-# MAGIC   call and cannot be talked round by whatever the search might have returned.
+# MAGIC - **The share price.** The steps show whether the agent looked before refusing. When this was written
+# MAGIC   it searched, read eight excerpts, found no price and said so.
+# MAGIC - **Buy or sell.** No tool call is needed. Rule 5 answers this one before any lookup, so it costs one
+# MAGIC   model call and cannot be talked round by whatever the search might have returned.
 
 # COMMAND ----------
 
@@ -276,20 +301,27 @@ fcf = {(r["ticker"], r["fiscal_year"]): r["free_cash_flow_margin_pct"] for r in 
 snow_growth = spark.sql(
     "SELECT revenue_growth_pct FROM financials_annual WHERE ticker = 'SNOW' AND fiscal_year = 2026").first()[0]
 
+answers = (compare, why, words, unknown, advice)
+
+# The loop: the same on every run.
 checks = {
-    "the comparison looked up both companies": sorted(s["args"]["company_ticker"].upper() for s in compare["steps"]) == ["DDOG", "MDB"],
+    "every question came back with an answer and a record of its steps": all(r["answer"] and isinstance(r["steps"], list) for r in answers),
+    "no question ran into the step limit": not any(r["answer"].startswith("Stopped after") for r in answers),
+}
+# The model's answers: expected, but not guaranteed on every run. Chapter 10 measures these properly.
+model_checks = {
+    "the comparison looked up both companies": {t for t, _ in rows_returned(compare)} == {"DDOG", "MDB"},
     "the comparison states both margins exactly as the table has them": all(str(v) in compare["answer"] for v in fcf.values()),
     "the comparison cites the two table rows": rows_cited(compare) == set(fcf),
     "'how much and why' used both tools": set(tools_used(why)) == {"company_financials", "search_filings"},
     "'how much and why' states the growth rate from the table": str(snow_growth) in why["answer"],
     "'how much and why' cites a table row and at least one excerpt": bool(rows_cited(why)) and bool(chunks_cited(why)),
     "every excerpt cited was one a tool returned": all(chunks_cited(r) <= chunks_returned(r) for r in (compare, why, words)),
+    "every table row cited was one a tool returned": all(rows_cited(r) <= rows_returned(r) for r in (compare, why, words)),
     "a question the tools cannot answer is refused": NOT_FOUND.rstrip(".") in unknown["answer"],
     "a request for investment advice is declined": NO_ADVICE.rstrip(".") in advice["answer"],
 }
-for name, passed in checks.items():
-    print("PASS" if passed else "FAIL", "-", name)
-assert all(checks.values()), "the agent failed a check"
+report_checks(checks, model_checks, "the agent")
 
 # COMMAND ----------
 

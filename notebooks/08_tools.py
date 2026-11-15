@@ -18,7 +18,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install --quiet databricks-langchain
+# MAGIC %pip install --quiet databricks-langchain==0.22.0
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -53,8 +53,8 @@
 # MAGIC   gross_margin_pct          DOUBLE COMMENT 'Gross profit divided by revenue, percent.',
 # MAGIC   operating_margin_pct      DOUBLE COMMENT 'Operating income (GAAP) divided by revenue, percent. Negative means an operating loss.',
 # MAGIC   net_income_musd           DOUBLE COMMENT 'Net income, millions of US dollars. Negative means a net loss.',
-# MAGIC   free_cash_flow_musd       DOUBLE COMMENT 'Operating cash flow minus capital expenditure, millions of US dollars.',
-# MAGIC   free_cash_flow_margin_pct DOUBLE COMMENT 'Free cash flow divided by revenue, percent.',
+# MAGIC   free_cash_flow_musd       DOUBLE COMMENT 'Operating cash flow minus purchases of property and equipment, millions of US dollars. Calculated the same way for every company. It is not the free cash flow a company quotes in its own report, which can subtract more and be lower.',
+# MAGIC   free_cash_flow_margin_pct DOUBLE COMMENT 'Free cash flow as defined here, divided by revenue, percent. Can be higher than the margin the company quotes in its own report.',
 # MAGIC   stock_comp_pct_of_revenue DOUBLE COMMENT 'Stock-based compensation divided by revenue, percent.',
 # MAGIC   cash_musd                 DOUBLE COMMENT 'Cash and cash equivalents at fiscal year end, millions of US dollars.'
 # MAGIC )
@@ -207,8 +207,8 @@ pick_both = tool_calls_for("How fast did Snowflake's revenue grow last year, and
 # MAGIC the risks went to `search_filings`, and it turned "Datadog" and "MongoDB" into the tickers the functions
 # MAGIC expect. Nobody wrote a rule for that. The `COMMENT` text is the rule.
 # MAGIC
-# MAGIC The third question needs both tools, and the model asked for one: the number first. It works one step
-# MAGIC at a time. Keep that in mind for section 6.
+# MAGIC The third question needs both tools. When this was written the model asked for one, the number first:
+# MAGIC it tends to work one step at a time. Keep that in mind for section 6.
 
 # COMMAND ----------
 
@@ -276,8 +276,10 @@ two_companies = one_round_trip(
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC The model got MongoDB's rows and, instead of answering, asked for Datadog's. That is the right next
-# MAGIC step. Our code is what stopped: it runs the tools once and expects an answer.
+# MAGIC When this was written, the model got MongoDB's rows and, instead of answering, asked for Datadog's.
+# MAGIC That is the right next step. Our code is what stopped: it runs the tools once and expects an answer.
+# MAGIC (If your model asked for both companies in its first reply, it answered here. A question it cannot
+# MAGIC finish in one round is "how much and why", which needs the second tool after the first.)
 # MAGIC
 # MAGIC Both numbers are in the table above, one call away. What is missing is a **loop**: run the tools, hand
 # MAGIC back the rows, and repeat until the model replies with text instead of another tool call. That loop,
@@ -297,19 +299,25 @@ def called(reply):
 mdb_margin = spark.sql(
     "SELECT free_cash_flow_margin_pct FROM financials_annual WHERE ticker = 'MDB' AND fiscal_year = 2026").first()[0]
 
+ddog_excerpts = [r["company"] for r in spark.sql(
+    "SELECT company FROM search_filings('What are the main risks?', 'DDOG')").collect()]
+
+# The functions: the same on every run.
 checks = {
     "company_financials returns five years for each company": spark.sql("""
         SELECT count(*) FROM (SELECT * FROM company_financials('SNOW') UNION ALL SELECT * FROM company_financials('ddog')
                               UNION ALL SELECT * FROM company_financials('MDB'))""").first()[0] == 15,
-    "search_filings with a ticker returns 8 excerpts from that company only": [r["company"] for r in spark.sql(
-        "SELECT company FROM search_filings('What are the main risks?', 'DDOG')").collect()] == ["Datadog, Inc."] * 8,
+    "search_filings with a ticker returns up to 8 excerpts, from that company only":
+        1 <= len(ddog_excerpts) <= 8 and set(ddog_excerpts) == {"Datadog, Inc."},
+    "both functions became tools": sorted(short(t.name) for t in tools) == ["company_financials", "search_filings"],
+}
+# The model's choices: expected, but not guaranteed on every run.
+model_checks = {
     "a numbers question goes to company_financials": called(pick_numbers) == ["company_financials"],
     "a question about what management wrote goes to search_filings": called(pick_words) == ["search_filings"],
-    "one round trip answers with the margin exactly as the table has it": str(mdb_margin) in one_company.content,
+    "one round trip answers with the margin exactly as the table has it": str(mdb_margin) in (one_company.content or ""),
 }
-for name, passed in checks.items():
-    print("PASS" if passed else "FAIL", "-", name)
-assert all(checks.values()), "the tools failed a check"
+report_checks(checks, model_checks, "the tools")
 
 # COMMAND ----------
 

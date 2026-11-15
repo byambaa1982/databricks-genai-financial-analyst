@@ -14,7 +14,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install --quiet databricks-langchain
+# MAGIC %pip install --quiet databricks-langchain==0.22.0
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -178,11 +178,23 @@ print(llm.invoke("Why did Snowflake's revenue grow in fiscal year 2026? Was it h
 
 snow_top5 = ask("Why did Snowflake's revenue grow? Was it higher prices or more usage?", ticker="SNOW", k=5)
 
+# Where does the chunk that states the reason sit in the ranking?
+answer_chunk = spark.sql("""
+  SELECT chunk_id FROM filing_chunks
+  WHERE ticker = 'SNOW' AND content LIKE '%increased consumption of our platform by existing customers%' LIMIT 1
+""").first()[0]
+ranking = [d.metadata["chunk_id"] for d in snow["docs"]]
+print()
+print(f"The chunk that states the reason, {answer_chunk}, is",
+      f"number {ranking.index(answer_chunk) + 1} of the {len(ranking)} retrieved" if answer_chunk in ranking else f"not in the top {len(ranking)}")
+
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC With five chunks the model refuses. The sentence that states the reason is in the chunk ranked sixth, so
-# MAGIC the model never saw it, and it followed the rule: no answer in the excerpts, no answer.
+# MAGIC The last line says where the chunk with the reason is ranked. When this was written it was sixth. Given
+# MAGIC only five chunks, the model never saw it and refused: it followed the rule, no answer in the excerpts,
+# MAGIC no answer. If your ranking puts that chunk in the top five, the model answers with five as well, and
+# MAGIC the point still stands: whether the answer arrives depends on a number we chose.
 # MAGIC
 # MAGIC Two things to take from this:
 # MAGIC
@@ -234,6 +246,11 @@ numbers = ask("What was MongoDB's free cash flow margin in fiscal 2026, and how 
 
 # MAGIC %md
 # MAGIC ## 9. Check it
+# MAGIC
+# MAGIC Two kinds of check from here on. A **FAIL** is our code doing the wrong thing and stops the notebook.
+# MAGIC A **WARN** is the model answering differently from the run this chapter was written from. That can
+# MAGIC happen with no change on our side, so it does not stop the notebook: read the answer, then decide.
+# MAGIC Chapter 10 turns that reading into a measurement.
 
 # COMMAND ----------
 
@@ -248,15 +265,18 @@ def given_ids(result):
     return {d.metadata["chunk_id"] for d in result["docs"]}
 
 
+# What our code decides: the same on every run.
 checks = {
+    "a ticker filter keeps the search inside that company": all(d.metadata["ticker"] == "DDOG" for d in ddog["docs"]),
+    "the model is given the number of chunks we asked for": len(snow["docs"]) == TOP_K and len(snow_top5["docs"]) == 5,
+}
+# What the model decides: expected, but a model does not answer the same way every time.
+model_checks = {
     "the Snowflake answer cites at least one chunk": len(cited_ids(snow)) >= 1,
     "every chunk cited was one the model was given": all(cited_ids(r) <= given_ids(r) for r in (snow, ddog, numbers)),
-    "a ticker filter keeps the search inside that company": all(d.metadata["ticker"] == "DDOG" for d in ddog["docs"]),
     "an unanswerable question is refused, not guessed": NOT_FOUND.rstrip(".") in unknown["answer"],
 }
-for name, passed in checks.items():
-    print("PASS" if passed else "FAIL", "-", name)
-assert all(checks.values()), "the chain failed a check"
+report_checks(checks, model_checks, "the chain")
 
 # COMMAND ----------
 
